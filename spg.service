@@ -1,0 +1,25 @@
+# Untuk VPS tanpa Docker: simpan di /etc/systemd/system/spg.service
+[Unit]
+Description=Aplikasi Penjualan SPG
+After=network.target
+
+[Service]
+User=spg
+WorkingDirectory=/opt/spg
+Environment=SPG_DATA_DIR=/opt/spg/data
+Environment=SPG_HOST=127.0.0.1
+Environment=SPG_PORT=8090
+Environment=SPG_TRUST_PROXY=1
+Environment=SPG_REQUIRE_HTTPS=1
+Environment=SPG_TZ_OFFSET=7
+ExecStart=/usr/bin/python3 /opt/spg/app_spg.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/spg/data
+
+[Install]
+WantedBy=multi-user.target

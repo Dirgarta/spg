@@ -1,0 +1,93 @@
+==================================================================
+ APLIKASI PENJUALAN SPG — PANDUAN DEPLOY ONLINE
+==================================================================
+
+YANG DIBUTUHKAN
+  1. VPS kecil (1 vCPU / 1 GB RAM sudah cukup) — mis. Contabo, Biznet, DigitalOcean, Hetzner.
+  2. Nama domain / subdomain, mis. penjualan.perusahaan.com
+  3. Arahkan DNS domain (record A) ke IP VPS.
+
+----------------------------------------------------------------
+CARA 1 — DOCKER (paling mudah, HTTPS otomatis)
+----------------------------------------------------------------
+  1. Login ke VPS, pasang Docker:
+        curl -fsSL https://get.docker.com | sh
+  2. Upload folder PENJUALAN_SPG ke VPS, lalu:
+        cd PENJUALAN_SPG
+        cp .env.contoh .env
+        nano .env          (isi DOMAIN dan EMAIL Anda)
+        docker compose up -d --build
+  3. Lihat password master yang dibuat otomatis:
+        docker compose logs app | head -20
+  4. Buka https://DOMAIN-ANDA di browser, login sebagai "master", ganti password.
+
+  Sertifikat HTTPS diurus otomatis oleh Caddy (gratis, dari Let's Encrypt)
+  dan diperpanjang sendiri.
+
+  Perintah lain:
+        docker compose logs -f app      lihat log
+        docker compose restart app      restart
+        docker compose down             matikan
+
+----------------------------------------------------------------
+CARA 2 — VPS TANPA DOCKER (systemd + Caddy)
+----------------------------------------------------------------
+  1. Pasang kebutuhan:
+        sudo apt update && sudo apt install -y python3 python3-pip caddy
+        sudo pip3 install openpyxl
+  2. Buat user & folder:
+        sudo useradd -r -m -d /opt/spg spg
+        sudo mkdir -p /opt/spg/data && sudo chown -R spg:spg /opt/spg
+        sudo cp app_spg.py /opt/spg/
+  3. Pasang service:
+        sudo cp spg.service /etc/systemd/system/
+        sudo systemctl daemon-reload && sudo systemctl enable --now spg
+        sudo journalctl -u spg -n 30      (lihat password master pertama)
+  4. Isi /etc/caddy/Caddyfile:
+        penjualan.domainanda.com {
+            reverse_proxy 127.0.0.1:8090 {
+                header_up X-Forwarded-Proto {scheme}
+            }
+        }
+     lalu:  sudo systemctl reload caddy
+
+----------------------------------------------------------------
+PENGATURAN KEAMANAN WAJIB SETELAH ONLINE
+----------------------------------------------------------------
+  [ ] Ganti password master (dipaksa saat login pertama).
+  [ ] Aktifkan verifikasi 2 langkah untuk akun master:
+      menu Akun -> Aktifkan verifikasi 2 langkah (pakai Google Authenticator).
+  [ ] Hapus file data/PASSWORD_AWAL.txt setelah password dicatat.
+  [ ] Tutup port lain di VPS:
+        sudo ufw allow 22,80,443/tcp && sudo ufw enable
+      (aplikasi TIDAK boleh diakses langsung di port 8090 dari internet)
+  [ ] Backup rutin: file database ada di volume Docker (spgdata) atau /opt/spg/data.
+      Salinan harian otomatis tersimpan di folder data/backup (30 hari terakhir).
+      Contoh backup ke komputer lokal:
+        docker compose cp app:/data/spg.db ./backup-$(date +%F).db
+  [ ] Perbarui server sebulan sekali: sudo apt update && sudo apt upgrade -y
+
+----------------------------------------------------------------
+PENGAMANAN YANG SUDAH ADA DI DALAM APLIKASI
+----------------------------------------------------------------
+  - Password disimpan sebagai hash scrypt + salt acak (tidak bisa dibaca balik),
+    aturan minimal 10 karakter, kombinasi huruf & angka, tidak boleh nama/username.
+  - Password baru wajib diganti saat pertama kali login.
+  - Salah password 5 kali -> akun terkunci 15 menit; percobaan login dibatasi per IP.
+  - Sesi disimpan sebagai hash di database; cookie HttpOnly + SameSite=Strict + Secure.
+    Sesi otomatis habis (master 8 jam, SPG 12 jam) dan mati bila 2 jam tidak dipakai.
+  - Proteksi CSRF (token per sesi) pada semua perubahan data.
+  - Header keamanan: CSP dengan nonce, HSTS, X-Frame-Options DENY, nosniff, no-store.
+  - Verifikasi 2 langkah (TOTP) untuk akun yang mengaktifkan.
+  - RBAC: SPG hanya bisa membuka halaman input & datanya sendiri; menu master
+    (data toko, produk, akun, laporan, log) ditolak oleh server, bukan hanya disembunyikan.
+  - SPG hanya bisa input untuk toko yang ditugaskan kepadanya.
+  - Semua aktivitas penting tercatat di Log Keamanan beserta IP dan perangkat.
+  - Backup database otomatis setiap hari.
+
+----------------------------------------------------------------
+UPDATE APLIKASI
+----------------------------------------------------------------
+  Docker : ganti app_spg.py lalu  docker compose up -d --build
+  systemd: sudo cp app_spg.py /opt/spg/ && sudo systemctl restart spg
+  Data (database) tidak terpengaruh saat update.

@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      SPG_NAMA: "${SPG_NAMA:-Penjualan SPG}"
+      SPG_TZ_OFFSET: "${SPG_TZ_OFFSET:-7}"
+      SPG_TRUST_PROXY: "1"
+      SPG_REQUIRE_HTTPS: "1"
+      SPG_ADMIN_PASSWORD: "${SPG_ADMIN_PASSWORD:-}"
+      SPG_EDIT_MENIT: "${SPG_EDIT_MENIT:-60}"
+    volumes:
+      - spgdata:/data
+    expose:
+      - "8090"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:?isi DOMAIN di file .env}"
+      EMAIL: "${EMAIL:-admin@example.com}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  spgdata:
+  caddydata:
+  caddyconfig:

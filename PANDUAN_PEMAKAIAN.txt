@@ -1,0 +1,41 @@
+==================================================================
+ APLIKASI PENJUALAN SPG — CARA PAKAI
+==================================================================
+
+A. UNTUK MASTER (pemilik / admin)
+   Login di alamat https://domain-anda
+   1. Menu "Produk"  -> tambah produk + harga per botol / per dus + isi per dus.
+                        Harga ini yang nanti muncul otomatis di HP SPG.
+   2. Menu "Toko"    -> tambah toko (nama, wilayah, alamat) dan centang SPG yang bertugas.
+   3. Menu "Akun SPG"-> buat akun untuk tiap SPG. Password dibuat otomatis dan hanya
+                        ditampilkan SEKALI, catat lalu berikan ke SPG.
+                        Bisa juga menentukan toko langsung dari sini.
+   4. Menu "Dashboard" -> pantau input SPG secara langsung (diperbarui tiap 20 detik).
+   5. Menu "Penjualan" -> filter per tanggal, SPG, toko, produk, jual/sample,
+                          lalu Export Excel.
+   6. Menu "Laporan"   -> rekap otomatis per SPG, per toko, per produk, per tanggal,
+                          dan per wilayah.
+   7. Menu "Log Keamanan" -> siapa login, dari IP mana, siapa menghapus data, dll.
+   8. Menu "Akun" (kanan atas) -> ganti password & aktifkan verifikasi 2 langkah.
+
+B. UNTUK SPG (lewat HP)
+   1. Buka https://domain-anda di browser HP, login dengan username & password
+      dari master. Saat pertama login, wajib membuat password sendiri.
+      Tips: simpan halaman ke layar utama HP (menu browser -> "Tambahkan ke layar utama").
+   2. Langkah input hanya 3:
+      1) TOKO   : ketik beberapa huruf nama toko, lalu pilih.
+                  (toko terakhir otomatis terpilih saat buka aplikasi)
+      2) PRODUK : tekan kotak produk.
+      3) JUMLAH : pilih BOTOL atau DUS, atur jumlah dengan tombol - / +.
+                  Harga muncul otomatis dan boleh diubah bila harga berbeda.
+                  Untuk barang gratis, aktifkan "Sample gratis" (harga jadi 0).
+      Lalu tekan tombol hijau KIRIM.
+   3. Data langsung masuk ke master lengkap dengan tanggal dan jam.
+   4. Bagian bawah menampilkan semua yang sudah dikirim hari ini beserta totalnya.
+      Salah input? Tekan "Hapus" (berlaku sampai 60 menit; setelah itu hubungi master).
+
+C. CATATAN
+   - 1 dus dihitung otomatis menjadi sekian botol sesuai isi per dus,
+     sehingga laporan botol tetap akurat.
+   - SPG tidak bisa melihat data SPG lain, tidak bisa mengubah harga master,
+     dan tidak bisa membuka menu master.
