@@ -837,6 +837,54 @@ def log_list(q):
                 "aksi":[r[0] for r in conn.execute("SELECT DISTINCT aksi FROM log ORDER BY aksi")]}
 
 # =====================================================================
+# BACKUP & PEMULIHAN (master)
+# =====================================================================
+def backup_bytes():
+    tmp = DATA_DIR / f"tmp_{new_uid()}.db"
+    try:
+        src, dst = sqlite3.connect(DB_PATH), sqlite3.connect(tmp)
+        src.backup(dst); dst.close(); src.close()
+        return tmp.read_bytes()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+def restore_db(user, data, password, ip):
+    if len(data) < 1024 or not data.startswith(b"SQLite format 3\x00"):
+        raise ApiError(400, "File bukan database SPG yang valid.")
+    with LOCK:
+        with db() as conn:
+            u = one(conn.execute("SELECT * FROM pengguna WHERE uid=?", (user["uid"],)))
+        if not cek_pw(password, u["pw_hash"], u["pw_salt"]):
+            rate_limit(ip, "restore", 5, 600); raise ApiError(400, "Password salah.")
+        tmp = DATA_DIR / f"restore_{new_uid()}.db"
+        tmp.write_bytes(data)
+        try:
+            t = sqlite3.connect(tmp)
+            try:
+                ok = t.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                tabel = {r[0] for r in t.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not ok or not {"pengguna","toko","produk","penjualan"} <= tabel:
+                    raise ApiError(400, "Isi file bukan database aplikasi ini atau rusak.")
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                aman = BACKUP_DIR / f"sebelum_restore_{now():%Y%m%d_%H%M%S}.db"
+                a, b = sqlite3.connect(DB_PATH), sqlite3.connect(aman)
+                a.backup(b); b.close(); a.close()
+                cur = sqlite3.connect(DB_PATH); t.backup(cur); cur.close()
+            finally:
+                t.close()
+        finally:
+            tmp.unlink(missing_ok=True)
+        try:
+            with db() as conn: catat(conn, user, "RESTORE", "database dipulihkan dari file", ip)
+        except Exception: pass
+    return {"ok": True}
+
+def backup_daftar():
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    return [{"nama": f.name, "ukuran": f.stat().st_size, "waktu": datetime.fromtimestamp(f.stat().st_mtime, TZ).isoformat(timespec="seconds")}
+            for f in sorted(BACKUP_DIR.glob("*.db"), reverse=True)][:40]
+
+# =====================================================================
 # EXPORT
 # =====================================================================
 try:
@@ -1083,6 +1131,19 @@ def r_jual_hapus(h,q,user,uid): h.json(entri_hapus(user,uid,h.ip))
 
 @route("GET",r"/api/penjualan",SEMUA)
 def r_jual_list(h,q,user): h.json(entri_list(user,q))
+
+@route("GET",r"/export/backup",MASTER)
+def r_backup(h,q,user):
+    with db() as conn: catat(conn,user,"BACKUP_UNDUH","unduh database",h.ip)
+    h.file(backup_bytes(), f"SPG_BACKUP_{now():%Y%m%d_%H%M}.db", "application/octet-stream")
+
+@route("GET",r"/api/backup",MASTER)
+def r_backup_list(h,q,user): h.json(backup_daftar())
+
+@route("POST",r"/api/restore",MASTER)
+def r_restore(h,q,user):
+    from urllib.parse import unquote
+    h.json(restore_db(user, h.raw(100_000_000), unquote(h.headers.get("X-Password","")), h.ip))
 
 @route("GET",r"/export/penjualan",SEMUA)
 def r_export(h,q,user):
@@ -1771,7 +1832,7 @@ async function mPermintaanDepo(el){
 // ================================================================
 const TAB_MASTER=[['dashboard','Dashboard'],['penjualan','Penjualan'],['laporan','Laporan'],
                   ['spg','Akun SPG'],['toko','Toko'],['produk','Produk'],
-                  ['permintaan','Permintaan'],['log','Log Keamanan']];
+                  ['permintaan','Permintaan'],['backup','Backup Data'],['log','Log Keamanan']];
 let tabMaster='dashboard';
 function masterUI(){
   const nav=$('#tabs');nav.style.display='flex';
@@ -1785,7 +1846,7 @@ function gantiTabMaster(t){
   clearInterval(TIMER);
   $('#isi').innerHTML='<div class="card">Memuat…</div>';
   ({dashboard:mDashboard,penjualan:mPenjualan,laporan:mLaporan,spg:mSpg,toko:mToko,
-    produk:mProduk,permintaan:mPermintaanMaster,log:mLog}[t])($('#isi'));
+    produk:mProduk,permintaan:mPermintaanMaster,backup:mBackup,log:mLog}[t])($('#isi'));
 }
 
 // ---- DASHBOARD (shared master & depo) ----
@@ -2170,6 +2231,35 @@ async function mProduk(el){
   }));
 }
 
+async function mBackup(el){
+  el=resetEl(el);
+  const daftar=await api('/api/backup');
+  el.innerHTML=`<div class="card"><h2>Simpan salinan data (disarankan tiap hari)</h2>
+    <div class="note info">File backup berisi <b>semua data</b> (akun, toko, penjualan). Simpan di Google Drive / flashdisk, jangan dibagikan ke orang lain.</div>
+    <button class="btn primary big block" id="b-unduh">⬇ Download Backup Database</button></div>
+    <div class="card"><h2>Pulihkan dari file backup</h2>
+    <div class="note warn">Semua data sekarang akan DIGANTI dengan isi file backup. Sistem otomatis membuat salinan pengaman dulu. Setelah berhasil, semua pengguna perlu login ulang.</div>
+    <label class="f">Pilih file backup (.db)</label><input type="file" id="b-file" accept=".db">
+    <div style="height:10px"></div><label class="f">Password Anda (konfirmasi)</label><input type="password" id="b-pw" autocomplete="current-password">
+    <div style="height:12px"></div><button class="btn danger block" id="b-pulih">Pulihkan Data</button></div>
+    <div class="card"><h2>Salinan otomatis di server (30 hari terakhir)</h2><div class="tbl" style="max-height:260px"><table>
+      <thead><tr><th>File</th><th>Waktu</th><th>Ukuran</th></tr></thead><tbody>${daftar.map(f=>`<tr><td>${esc(f.nama)}</td>
+      <td>${tgl(f.waktu)} ${jam(f.waktu)}</td><td class="n">${num(f.ukuran/1024)} KB</td></tr>`).join('')||'<tr><td colspan="3" class="empty">Belum ada.</td></tr>'}</tbody></table></div>
+      <p class="muted" style="font-size:13px">Salinan ini ada di server yang sama. Tetap download backup ke komputer Anda secara rutin.</p></div>`;
+  $('#b-unduh').onclick=()=>{unduh('/export/backup');toast('Menyiapkan file backup…');};
+  $('#b-pulih').onclick=jaga(async()=>{
+    const f=$('#b-file').files[0];
+    if(!f)return toast('Pilih file backup dulu','err');
+    if(!$('#b-pw').value)return toast('Isi password dulu','err');
+    if(!await konfirmasi('Pulihkan data',`Ganti semua data dengan isi <b>${esc(f.name)}</b>?`,'Ya, pulihkan'))return;
+    const res=await fetch('/api/restore',{method:'POST',credentials:'same-origin',body:f,
+      headers:{'X-CSRF-Token':ME.csrf,'X-Password':encodeURIComponent($('#b-pw').value),'Content-Type':'application/octet-stream'}});
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok)return toast(d.error||'Gagal memulihkan','err');
+    ME=null;tampilLogin('Data berhasil dipulihkan. Silakan masuk lagi.');
+  });
+}
+
 async function mLog(el){
   el=resetEl(el);
   el.innerHTML=`<div class="card"><div class="form">
@@ -2206,9 +2296,44 @@ async function mLog(el){
 </html>
 '''
 
+def restore_dari_file():
+    """Bila ada file RESTORE.db di folder data, database dipulihkan dari file itu saat aplikasi start.
+    Berguna bila web tidak bisa dibuka: upload RESTORE.db lewat Railway CLI lalu restart."""
+    f = DATA_DIR / "RESTORE.db"
+    if not f.exists(): return
+    try:
+        t = sqlite3.connect(f)
+        try:
+            ok = t.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            tabel = {r[0] for r in t.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not ok or not {"pengguna","toko","produk","penjualan"} <= tabel:
+                print("RESTORE.db TIDAK VALID - diabaikan"); t.close()
+                f.replace(DATA_DIR / "RESTORE_GAGAL.db"); return
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            if DB_PATH.exists():
+                a_, b_ = sqlite3.connect(DB_PATH), sqlite3.connect(BACKUP_DIR / f"sebelum_restore_{now():%Y%m%d_%H%M%S}.db")
+                a_.backup(b_); b_.close(); a_.close()
+            cur = sqlite3.connect(DB_PATH); t.backup(cur); cur.close()
+        finally:
+            try: t.close()
+            except Exception: pass
+        f.replace(DATA_DIR / f"RESTORE_selesai_{now():%Y%m%d_%H%M%S}.db")
+        print("DATABASE DIPULIHKAN dari RESTORE.db")
+    except Exception as e:
+        print("Gagal restore dari RESTORE.db:", e)
+
+def _loop_backup():
+    while True:
+        time.sleep(3600)
+        try: backup_harian()
+        except Exception as e: print("backup gagal:", e)
+
 def main():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    restore_dari_file()
     init_db()
     backup_harian()
+    threading.Thread(target=_loop_backup, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     print("="*64)
