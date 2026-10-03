@@ -548,9 +548,11 @@ def user_hapus(user, uid, ip):
 # =====================================================================
 # TOKO & PRODUK
 # =====================================================================
-def toko_list(q=None):
+def toko_list(q=None, wilayah_paksa=None, spg_uid=None):
     q = q or {}
     where, args = [], []
+    if wilayah_paksa: where.append("t.wilayah=?"); args.append(wilayah_paksa)
+    if spg_uid: where.append("t.uid IN (SELECT toko_uid FROM spg_toko WHERE spg_uid=?)"); args.append(spg_uid)
     if q1(q,"aktif","1") == "1": where.append("t.aktif=1")
     if q1(q,"wilayah"): where.append("t.wilayah=?"); args.append(q1(q,"wilayah"))
     if q1(q,"q"):
@@ -742,9 +744,10 @@ def _filter(q, wilayah_paksa=None):
                       ("toko_uid","j.toko_uid = ?"),("produk_uid","j.produk_uid = ?"),
                       ("jenis","j.jenis = ?"),("satuan","j.satuan = ?"),("wilayah","t.wilayah = ?")):
         v = q1(q,key)
+        if key=="wilayah" and wilayah_paksa: continue
         if v: where.append(kolom); args.append(v)
     if wilayah_paksa:
-        if "t.wilayah = ?" not in where: where.append("t.wilayah = ?"); args.append(wilayah_paksa)
+        where.append("t.wilayah = ?"); args.append(wilayah_paksa)
     if q1(q,"q"):
         where.append("(t.nama LIKE ? OR pr.nama LIKE ? OR pr.kode LIKE ? OR p.nama LIKE ? OR j.catatan LIKE ?)")
         args += [f"%{q1(q,'q')}%"]*5
@@ -1118,7 +1121,8 @@ def r_user_reset(h,q,user,uid): h.json(user_reset_pw(user,uid,h.ip))
 def r_user_buka(h,q,user,uid): h.json(user_buka_kunci(user,uid,h.ip))
 
 @route("GET",r"/api/toko",SEMUA)
-def r_toko_list(h,q,user): h.json(toko_list(q))
+def r_toko_list(h,q,user):
+    h.json(toko_list(q, wilayah_depo(user), user["uid"] if user["role"]=="spg" else None))
 
 @route("POST",r"/api/toko",MASTER)
 def r_toko_baru(h,q,user): h.json(toko_simpan(user,h.body(),None,h.ip))
