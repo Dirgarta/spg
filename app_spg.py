@@ -476,7 +476,7 @@ def user_simpan(user, body, uid=None, ip=""):
                 if not sisa: raise ApiError(400,"Minimal harus ada satu master aktif.")
             conn.execute("""UPDATE pengguna SET username=?,nama=?,role=?,wilayah=?,aktif=?,telepon=?,catatan=?,diubah=?
                             WHERE uid=?""",
-                (username,nama,role,bersih(body.get("wilayah","")),aktif,
+                (username,nama,role,upper(body.get("wilayah","")),aktif,
                  bersih(body.get("telepon")),bersih(body.get("catatan")),now_iso(),uid))
             if not aktif: conn.execute("DELETE FROM sesi WHERE pengguna_uid=?",(uid,))
             catat(conn,user,"UBAH_PENGGUNA",f"{username} ({role})",ip)
@@ -485,7 +485,7 @@ def user_simpan(user, body, uid=None, ip=""):
             h, salt = hash_pw(pw)
             conn.execute("""INSERT INTO pengguna (uid,username,nama,role,wilayah,pw_hash,pw_salt,harus_ganti,aktif,
                             telepon,catatan,dibuat,diubah) VALUES (?,?,?,?,?,?,?,1,1,?,?,?,?)""",
-                (uid,username,nama,role,bersih(body.get("wilayah","")),h,salt,
+                (uid,username,nama,role,upper(body.get("wilayah","")),h,salt,
                  bersih(body.get("telepon")),bersih(body.get("catatan")),now_iso(),now_iso()))
             hasil["password"] = pw
             catat(conn,user,"TAMBAH_PENGGUNA",f"{username} ({role})",ip)
@@ -564,6 +564,12 @@ def toko_list(q=None):
                         WHERE st.toko_uid=t.uid) AS spg
                 FROM toko t {w} ORDER BY t.nama""", args))
 
+def _set_spg_toko(conn, toko_uid, spg_uids):
+    conn.execute("DELETE FROM spg_toko WHERE toko_uid=?", (toko_uid,))
+    for sid in spg_uids:
+        if conn.execute("SELECT 1 FROM pengguna WHERE uid=? AND role='spg'", (sid,)).fetchone():
+            conn.execute("INSERT OR IGNORE INTO spg_toko VALUES (?,?,?)", (sid, toko_uid, now_iso()))
+
 def toko_simpan(user, body, uid=None, ip=""):
     nama = upper(body.get("nama"))
     if not nama: raise ApiError(400,"Nama toko wajib diisi.")
@@ -580,6 +586,9 @@ def toko_simpan(user, body, uid=None, ip=""):
             conn.execute("INSERT INTO toko (uid,nama,wilayah,alamat,catatan,aktif,diubah,dibuat) VALUES (?,?,?,?,?,?,?,?)",
                 (uid,*data,now_iso()))
             catat(conn,user,"TAMBAH_TOKO",nama,ip)
+        if "spg_uids" in body:
+            _set_spg_toko(conn, uid, body.get("spg_uids") or [])
+            catat(conn,user,"SET_SPG_TOKO",f"{nama}: {len(body.get('spg_uids') or [])} SPG",ip)
     return {"uid":uid,"nama":nama}
 
 def toko_hapus(user, uid, ip):
@@ -754,7 +763,7 @@ def _entri_list(conn, q, limit=2000, wilayah_paksa=None):
     return {"rows":data,"ringkas":r}
 
 def entri_list(user, q):
-    wp = user.get("wilayah") if user["role"]=="kepala_depo" else None
+    wp = wilayah_depo(user)
     if user["role"]=="spg": q = {**q,"spg_uid":[user["uid"]]}
     with db() as conn:
         return _entri_list(conn, q, wilayah_paksa=wp)
@@ -779,7 +788,8 @@ def laporan(q, wilayah_paksa=None):
 
 def dashboard(wilayah_paksa=None):
     hari = today_str(); bulan = hari[:8]+"01"
-    wh = f" AND t.wilayah='{wilayah_paksa}'" if wilayah_paksa else ""
+    wh = " AND t.wilayah=?" if wilayah_paksa else ""
+    wa = (wilayah_paksa,) if wilayah_paksa else ()
     with db() as conn:
         f = lambda sql,*a: one(conn.execute(sql,a))
         hari_ini = f(f"""SELECT COUNT(*) AS entri,COALESCE(SUM(j.total),0) AS total,
@@ -787,14 +797,14 @@ def dashboard(wilayah_paksa=None):
                                 COALESCE(SUM(CASE WHEN j.jenis='SAMPLE' THEN j.botol_setara END),0) AS sample,
                                 COUNT(DISTINCT j.spg_uid) AS spg,COUNT(DISTINCT j.toko_uid) AS toko
                          FROM penjualan j JOIN toko t ON t.uid=j.toko_uid
-                         WHERE j.dihapus=0 AND j.tanggal=?{wh}""",hari)
+                         WHERE j.dihapus=0 AND j.tanggal=?{wh}""",hari,*wa)
         bulan_ini = f(f"""SELECT COUNT(*) AS entri,COALESCE(SUM(j.total),0) AS total,
                                  COALESCE(SUM(CASE WHEN j.jenis='JUAL' THEN j.botol_setara END),0) AS botol,
                                  COALESCE(SUM(CASE WHEN j.jenis='SAMPLE' THEN j.botol_setara END),0) AS sample
                           FROM penjualan j JOIN toko t ON t.uid=j.toko_uid
-                          WHERE j.dihapus=0 AND j.tanggal>=?{wh}""",bulan)
+                          WHERE j.dihapus=0 AND j.tanggal>=?{wh}""",bulan,*wa)
         terbaru = rows(conn.execute(
-            _ENTRI_SQL+f" WHERE j.dihapus=0{wh} ORDER BY j.waktu DESC LIMIT 25"))
+            _ENTRI_SQL+f" WHERE j.dihapus=0{wh} ORDER BY j.waktu DESC LIMIT 25",wa))
         per_spg = rows(conn.execute(
             f"""SELECT p.nama AS spg,p.uid,
                        COALESCE(SUM(CASE WHEN j.jenis='JUAL' THEN j.botol_setara END),0) AS botol,
@@ -808,7 +818,7 @@ def dashboard(wilayah_paksa=None):
         belum = rows(conn.execute(
             f"""SELECT t.nama,t.wilayah FROM toko t WHERE t.aktif=1{wh}
                AND NOT EXISTS (SELECT 1 FROM penjualan j WHERE j.toko_uid=t.uid AND j.dihapus=0 AND j.tanggal=?)
-               ORDER BY t.nama LIMIT 50""",(hari,)))
+               ORDER BY t.nama LIMIT 50""",(*wa,hari)))
     return {"hari_ini":hari_ini,"bulan_ini":bulan_ini,"terbaru":terbaru,"per_spg":per_spg,
             "toko_belum_isi":belum,"jam":now_iso()}
 
@@ -842,7 +852,7 @@ def _baris_export(r):
             r["jenis"],r["satuan"],r["qty"],r["isi_dus"],r["botol_setara"],r["harga"],r["total"],r["catatan"]]
 
 def export_penjualan(user, q, ip):
-    wp = user.get("wilayah") if user["role"]=="kepala_depo" else None
+    wp = wilayah_depo(user)
     if user["role"]=="spg": q = {**q,"spg_uid":[user["uid"]]}
     with db() as conn:
         data = _entri_list(conn, q, limit=100000, wilayah_paksa=wp)
@@ -878,6 +888,10 @@ def export_penjualan(user, q, ip):
 # =====================================================================
 # HTTP ROUTING
 # =====================================================================
+def wilayah_depo(user):
+    if user["role"] != "kepala_depo": return None
+    return user.get("wilayah") or "__TANPA_WILAYAH__"
+
 MASTER = ("master",)
 DEPO   = ("master","kepala_depo")
 SEMUA  = ("master","kepala_depo","spg")
@@ -1074,12 +1088,12 @@ def r_export(h,q,user):
 # master & depo
 @route("GET",r"/api/dashboard",SEMUA)
 def r_dash(h,q,user):
-    wp = user.get("wilayah") if user["role"]=="kepala_depo" else None
+    wp = wilayah_depo(user)
     h.json(dashboard(wp))
 
 @route("GET",r"/api/laporan",VIEW)
 def r_laporan(h,q,user):
-    wp = user.get("wilayah") if user["role"]=="kepala_depo" else None
+    wp = wilayah_depo(user)
     h.json(laporan(q,wp))
 
 @route("GET",r"/api/pengguna",MASTER)
@@ -1277,6 +1291,31 @@ dialog .f{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8p
   header{padding:10px 14px;padding-top:calc(10px + var(--sat))}
   nav.tabs{top:0}
 }
+
+/* ===== TAMPILAN BARU ===== */
+:root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#f1f5f9;--brand:#0d9488;--brand2:#0f766e;--soft:#ccfbf1}
+body{background:var(--bg);letter-spacing:.005em}
+header{background:linear-gradient(135deg,#0f766e,#0d9488);box-shadow:0 2px 12px rgba(15,118,110,.25)}
+nav.tabs{background:linear-gradient(135deg,#0f766e,#0d9488)}
+nav.tabs button{border-radius:999px;margin-bottom:8px;padding:8px 16px;transition:.15s}
+nav.tabs button.active{background:#fff;color:var(--brand2);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.card,.spg-step{border:0;border-radius:18px;box-shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.05)}
+.card h2,.spg-step h2{font-size:15px;color:var(--ink);text-transform:none;letter-spacing:0}
+.spg-wrap{counter-reset:langkah}
+.spg-step h2::before{counter-increment:langkah;content:counter(langkah);display:inline-grid;place-items:center;
+  width:26px;height:26px;margin-right:8px;border-radius:50%;background:var(--brand);color:#fff;font-size:13px}
+.spg-step:last-child h2::before{display:none}
+.ring div{border:0;border-radius:16px;padding:14px;box-shadow:0 1px 3px rgba(15,23,42,.06);border-left:4px solid var(--brand)}
+.ring b{font-size:20px}
+.btn{border-radius:12px;transition:.15s}
+.btn.primary,.btn.ok{box-shadow:0 4px 12px rgba(13,148,136,.3)}
+input,select,textarea{border-radius:12px;border-color:#cbd5e1}
+th{background:#0f766e;padding:11px 12px}
+td{padding:11px 12px}
+tbody tr:hover{background:#f0fdfa}
+.badge{padding:3px 11px}
+.empty{padding:36px;font-size:15px}
+.empty::before{content:"📭";display:block;font-size:34px;margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -1372,6 +1411,7 @@ function toast(pesan,tipe='ok'){
   clearTimeout(tOut);tOut=setTimeout(()=>t.style.display='none',tipe==='err'?6000:2600);
 }
 const jaga=fn=>async(...a)=>{try{return await fn(...a);}catch(e){toast(e.message,'err');}};
+const resetEl=el=>{const n=el.cloneNode(false);el.replaceWith(n);return n;};
 function unduh(url){const a=document.createElement('a');a.href=url;document.body.append(a);a.click();a.remove();}
 
 // ---- MODAL ----
@@ -1509,7 +1549,7 @@ async function spgUI(){
     <div class="ring" id="s-ring"></div>
 
     <div class="spg-step">
-      <h2>1. Pilih Toko</h2>
+      <h2>Pilih Toko <button class="btn sm" id="s-muat" style="float:right;text-transform:none">↻ Muat ulang</button></h2>
       ${d.toko.length===0?'<div class="note warn">Belum ada toko yang ditugaskan. Hubungi master.</div>':''}
       <select id="s-toko-sel">
         <option value="">— Pilih toko —</option>
@@ -1518,7 +1558,7 @@ async function spgUI(){
     </div>
 
     <div class="spg-step">
-      <h2>2. Pilih Produk</h2>
+      <h2>Pilih Produk</h2>
       <select id="s-produk-sel">
         <option value="">— Pilih produk —</option>
         ${d.produk.map(p=>`<option value="${p.uid}">${esc(p.nama)} · ${esc(p.kode)}</option>`).join('')}
@@ -1527,7 +1567,7 @@ async function spgUI(){
     </div>
 
     <div class="spg-step">
-      <h2>3. Jumlah & Satuan</h2>
+      <h2>Jumlah & Satuan</h2>
       <div class="seg">
         <button class="aktif" data-s="BOTOL">BOTOL</button>
         <button data-s="DUS">DUS</button>
@@ -1544,13 +1584,13 @@ async function spgUI(){
     </div>
 
     <div class="spg-step" id="s-harga-step">
-      <h2>4. Harga <span id="s-sat-label">per Botol</span></h2>
+      <h2>Harga <span id="s-sat-label">per Botol</span></h2>
       <input id="s-harga" inputmode="numeric" placeholder="0">
       <p class="muted" style="font-size:13px;margin:6px 0 0">Harga muncul otomatis, bisa diubah bila ada perubahan.</p>
     </div>
 
     <div class="spg-step">
-      <h2>5. Catatan (opsional)</h2>
+      <h2>Catatan (opsional)</h2>
       <input id="s-catatan" placeholder="contoh: promo akhir bulan, minta nota">
     </div>
 
@@ -1568,6 +1608,7 @@ async function spgUI(){
 
   // toko dropdown
   const selToko=$('#s-toko-sel');
+  $('#s-muat').onclick=()=>spgUI();
   if(toko)selToko.value=toko.uid;
   selToko.onchange=()=>{
     toko=d.toko.find(t=>t.uid===selToko.value)||null;
@@ -1587,15 +1628,6 @@ async function spgUI(){
     isiHarga();hitung();
   };
 
-  // satuan
-  $('#s-kirim').closest('.spg-step').previousElementSibling.previousElementSibling
-    .querySelector('.seg')?.addEventListener('click',e=>{
-      const b=e.target.closest('[data-s]');if(!b)return;
-      satuan=b.dataset.s;
-      $$('.seg button').forEach(x=>x.classList.toggle('aktif',x===b));
-      isiHarga();hitung();
-    });
-  // re-attach seg since innerHTML rebuilt
   document.querySelector('.seg').addEventListener('click',e=>{
     const b=e.target.closest('[data-s]');if(!b)return;
     satuan=b.dataset.s;
@@ -1694,6 +1726,7 @@ function gantiTabDepo(t){
 }
 
 async function mPermintaanDepo(el){
+  el=resetEl(el);
   el.innerHTML=`<div class="card">
     <div class="row"><h2 style="margin:0;flex:1">Permintaan ke Master</h2>
     <button class="btn primary" id="pr-baru">+ Kirim Permintaan</button></div></div>
@@ -1702,7 +1735,7 @@ async function mPermintaanDepo(el){
     const list=await api('/api/permintaan');
     $('#pr-list').innerHTML=list.length?list.map(r=>`<div class="entri">
       <div class="isi"><b>${esc({tambah_toko:'Tambah Toko',tambah_produk:'Tambah Produk',tambah_spg:'Tambah SPG'}[r.tipe]||r.tipe)}</b>
-        <small>${tgl(r.waktu)} · ${JSON.stringify(JSON.parse(r.data||'{}'))}</small>
+        <small>${tgl(r.waktu)} · ${esc(JSON.parse(r.data||'{}').keterangan||'')}</small>
         ${r.catatan_master?`<small class="muted">Catatan master: ${esc(r.catatan_master)}</small>`:''}</div>
       <div><span class="badge ${r.status==='approved'?'b-ok':r.status==='rejected'?'b-err':'b-sample'}">${r.status}</span></div>
     </div>`).join(''):'<div class="empty">Belum ada permintaan.</div>';
@@ -1753,6 +1786,7 @@ function gantiTabMaster(t){
 
 // ---- DASHBOARD (shared master & depo) ----
 async function mDashboard(el){
+  el=resetEl(el);
   const gambar=d=>{
     const h=d.hari_ini,b=d.bulan_ini;
     el.innerHTML=`
@@ -1835,6 +1869,7 @@ async function opsiFilter(){
 }
 
 async function mPenjualan(el){
+  el=resetEl(el);
   const opsi=await opsiFilter();
   const xtra=ME.role==='master'?'<button class="btn" id="f-xls">Export Excel</button>':'';
   el.innerHTML=filterBar('f',opsi,xtra)+
@@ -1873,6 +1908,7 @@ async function mPenjualan(el){
 }
 
 async function mLaporan(el){
+  el=resetEl(el);
   const opsi=await opsiFilter();
   const xtra=`<button class="btn" id="l-xls">Export Excel</button>`;
   el.innerHTML=filterBar('l',opsi,xtra)+
@@ -1901,6 +1937,7 @@ async function mLaporan(el){
 }
 
 async function mPermintaanMaster(el){
+  el=resetEl(el);
   el.innerHTML=`<div class="card"><h2>Permintaan dari Kepala Depo</h2></div><div id="pm-list" class="card">Memuat…</div>`;
   const muat=jaga(async()=>{
     const list=await api('/api/permintaan');
@@ -1946,6 +1983,7 @@ async function mPermintaanMaster(el){
 }
 
 async function mSpg(el){
+  el=resetEl(el);
   const [users,toko]=await Promise.all([api('/api/pengguna'),api('/api/toko')]);
   el.innerHTML=`<div class="card"><div class="row">
     <h2 style="margin:0;flex:1">Akun pengguna</h2>
@@ -2023,6 +2061,7 @@ async function mSpg(el){
 }
 
 async function mToko(el){
+  el=resetEl(el);
   const [toko,users]=await Promise.all([api('/api/toko?aktif=0'),api('/api/pengguna')]);
   const spg=users.filter(u=>u.role==='spg');
   el.innerHTML=`<div class="card"><div class="row">
@@ -2080,6 +2119,7 @@ async function mToko(el){
 }
 
 async function mProduk(el){
+  el=resetEl(el);
   const produk=await api('/api/produk?semua=1');
   el.innerHTML=`<div class="card"><div class="row">
     <h2 style="margin:0;flex:1">Daftar produk & harga</h2>
@@ -2127,6 +2167,7 @@ async function mProduk(el){
 }
 
 async function mLog(el){
+  el=resetEl(el);
   el.innerHTML=`<div class="card"><div class="form">
     <div><label class="f">Dari</label><input type="date" id="g-dari"></div>
     <div><label class="f">Sampai</label><input type="date" id="g-sampai"></div>

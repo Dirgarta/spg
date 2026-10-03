@@ -91,3 +91,11 @@ UPDATE APLIKASI
   Docker : ganti app_spg.py lalu  docker compose up -d --build
   systemd: sudo cp app_spg.py /opt/spg/ && sudo systemctl restart spg
   Data (database) tidak terpengaruh saat update.
+
+----------------------------------------------------------------
+CATATAN VERSI TERBARU
+----------------------------------------------------------------
+  - Wilayah kepala depo otomatis KAPITAL; edit ulang akun kepala depo lama
+    (Ubah -> Simpan) agar cocok dengan wilayah toko.
+  - Penugasan SPG saat membuat/mengubah toko kini tersimpan.
+  - Untuk pakai tanpa internet/domain, gunakan paket OFFLINE.
